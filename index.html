@@ -76,14 +76,18 @@
 
     async function copy(text) {
       try {
-        await navigator.clipboard.writeText(text);
-        return true;
+        const copied = await Promise.race([
+          navigator.clipboard.writeText(text).then(() => true, () => false),
+          new Promise((resolve) => window.setTimeout(() => resolve(false), 1500))
+        ]);
+        if (copied) return true;
       } catch {
-        output.hidden = false;
-        output.focus();
-        output.select();
-        try { return document.execCommand('copy'); } catch { return false; }
+        // Fall through to the visible textarea copy method.
       }
+      output.hidden = false;
+      output.focus();
+      output.select();
+      try { return document.execCommand('copy'); } catch { return false; }
     }
 
     function notifyOpener(text, message) {
