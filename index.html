@@ -167,8 +167,18 @@
         action.textContent = copied ? '再次复制评论' : '复制评论';
         notifyOpener(text, message, dataRows);
       } catch (error) {
-        const denied = error?.name === 'NotAllowedError' || /permission|not allowed|access denied/i.test(String(error?.message || ''));
-        show(denied ? '请允许此页面访问本地网络，然后再次点击按钮。' : `提取失败：${error?.message || '无法连接本地助手，请确认终端保持打开'}`, 'error');
+        const message = String(error?.message || '');
+        const denied = error?.name === 'NotAllowedError' || /permission|not allowed|access denied/i.test(message);
+        const socketMissing = /socket|初始化客户端|not connected|timeout/i.test(message);
+        const unreachable = /Failed to fetch|NetworkError|Load failed|fetch resource/i.test(message);
+        const friendlyMessage = denied
+          ? '请允许此页面访问本地网络，然后再次点击按钮。'
+          : socketMissing
+            ? '本地助手已启动，请先在微信电脑版打开任意视频号页面，再点击按钮。'
+            : unreachable
+              ? '无法连接本地评论助手，请确认助手保持运行后重试。'
+              : `提取失败：${message || '本地助手返回异常'}`;
+        show(friendlyMessage, 'error');
       } finally {
         action.disabled = false;
       }
