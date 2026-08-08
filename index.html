@@ -74,6 +74,34 @@
       return lines.join('\n').trim();
     }
 
+    function rows(comments) {
+      const result = [];
+      comments.forEach((comment, index) => {
+        const mainName = comment.nickname || comment.authorContact?.nickname || '匿名用户';
+        result.push({
+          主评论序号: index + 1,
+          类型: '主评论',
+          昵称: mainName,
+          评论内容: String(comment.content || '').trim() || '[非文字评论]',
+          点赞数: Number(comment.likeCount) || 0,
+          发布时间: Number(comment.createtime) ? new Date(Number(comment.createtime) * 1000).toISOString() : '',
+          IP属地: comment.ipRegionInfo?.regionText || '',
+          回复对象: ''
+        });
+        replies(comment).forEach((reply) => result.push({
+          主评论序号: index + 1,
+          类型: '回复',
+          昵称: reply.nickname || reply.authorContact?.nickname || '匿名用户',
+          评论内容: String(reply.content || reply.replyContent || '').trim() || '[非文字回复]',
+          点赞数: Number(reply.likeCount) || 0,
+          发布时间: Number(reply.createtime) ? new Date(Number(reply.createtime) * 1000).toISOString() : '',
+          IP属地: reply.ipRegionInfo?.regionText || '',
+          回复对象: reply.replyNickname || mainName
+        }));
+      });
+      return result;
+    }
+
     async function copy(text) {
       try {
         const copied = await Promise.race([
@@ -90,10 +118,10 @@
       try { return document.execCommand('copy'); } catch { return false; }
     }
 
-    function notifyOpener(text, message) {
+    function notifyOpener(text, message, dataRows) {
       if (!window.opener) return;
       TRUSTED_OPENERS.forEach((origin) => {
-        try { window.opener.postMessage({ type: 'siyumenghai-comments', text, message }, origin); } catch {}
+        try { window.opener.postMessage({ type: 'siyumenghai-comments', text, message, rows: dataRows }, origin); } catch {}
       });
     }
 
@@ -130,13 +158,14 @@
         }
         if (!comments.length) throw new Error('这条视频没有返回可见评论');
         const text = format(comments);
+        const dataRows = rows(comments);
         output.value = text;
         output.hidden = false;
         const copied = await copy(text);
         const message = copied ? `已提取 ${comments.length} 条主评论并复制。` : `已提取 ${comments.length} 条主评论，请点击下方按钮复制。`;
         show(message, copied ? 'ok' : 'error');
         action.textContent = copied ? '再次复制评论' : '复制评论';
-        notifyOpener(text, message);
+        notifyOpener(text, message, dataRows);
       } catch (error) {
         const denied = error?.name === 'NotAllowedError' || /permission|not allowed|access denied/i.test(String(error?.message || ''));
         show(denied ? '请允许此页面访问本地网络，然后再次点击按钮。' : `提取失败：${error?.message || '无法连接本地助手，请确认终端保持打开'}`, 'error');
