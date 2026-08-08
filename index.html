@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>视频评论提取</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color:#172033;background:#f5fbf8}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}
+    main{width:min(720px,100%);padding:34px;border:1px solid #cfe8dc;border-radius:24px;background:#fff;box-shadow:0 18px 50px #0a6f4920}
+    h1{margin:0 0 10px;font-size:26px}p{line-height:1.7;color:#667085}button{border:0;border-radius:14px;padding:14px 22px;background:#079b68;color:#fff;font-size:17px;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:wait}
+    #status[data-kind="error"]{color:#d92d20}#status[data-kind="ok"]{color:#067647}textarea{width:100%;min-height:240px;margin-top:18px;padding:14px;border:1px solid #cfd8d3;border-radius:14px;resize:vertical;font:14px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>视频评论提取</h1>
+    <p id="status">正在连接本地评论助手。浏览器询问是否允许访问本地网络时，请选择“允许”。</p>
+    <button id="action" type="button">允许并提取评论</button>
+    <textarea id="output" aria-label="视频评论区内容" readonly hidden></textarea>
+  </main>
+  <script>
+    const API = 'http://127.0.0.1:2022';
+    const LIMIT = 200;
+    const TRUSTED_OPENERS = new Set(['http://siyumenghai.cn', 'https://siyumenghai.cn']);
+    const shareUrl = new URL(location.href).searchParams.get('url') || '';
+    const statusNode = document.querySelector('#status');
+    const action = document.querySelector('#action');
+    const output = document.querySelector('#output');
+
+    function show(message, kind = '') {
+      statusNode.textContent = message;
+      statusNode.dataset.kind = kind;
+    }
+
+    async function request(path, params) {
+      const url = new URL(path, API);
+      Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== '' && value !== undefined && value !== null) url.searchParams.set(key, value);
+      });
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        credentials: 'omit',
+        targetAddressSpace: 'local'
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || (payload.code !== undefined && Number(payload.code) !== 0)) {
+        throw new Error(payload.msg || payload.message || `本地助手返回 ${response.status}`);
+      }
+      return payload.data ?? payload;
+    }
+
+    function time(value) {
+      const date = new Date(Number(value) * 1000);
+      if (!Number(value) || Number.isNaN(date.getTime())) return '';
+      return new Intl.DateTimeFormat('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}).format(date);
+    }
+
+    function replies(comment) {
+      return Array.isArray(comment?.levelTwoComment) ? comment.levelTwoComment.filter(Boolean) : [];
+    }
+
+    function format(comments) {
+      const replyCount = comments.reduce((sum, item) => sum + replies(item).length, 0);
+      const lines = [`视频评论区（主评论 ${comments.length} 条${replyCount ? `，回复 ${replyCount} 条` : ''}）`, ''];
+      comments.forEach((comment, index) => {
+        const name = comment.nickname || comment.authorContact?.nickname || '匿名用户';
+        const meta = [name, time(comment.createtime), Number(comment.likeCount) ? `赞 ${comment.likeCount}` : '', comment.ipRegionInfo?.regionText || ''].filter(Boolean).join(' · ');
+        lines.push(`${index + 1}. ${meta}`, String(comment.content || '').trim() || '[非文字评论]');
+        replies(comment).forEach((reply) => lines.push(`   ↳ ${reply.nickname || reply.authorContact?.nickname || '匿名用户'}：${String(reply.content || reply.replyContent || '').trim() || '[非文字回复]'}`));
+        lines.push('');
+      });
+      return lines.join('\n').trim();
+    }
+
+    async function copy(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        output.hidden = false;
+        output.focus();
+        output.select();
+        try { return document.execCommand('copy'); } catch { return false; }
+      }
+    }
+
+    function notifyOpener(text, message) {
+      if (!window.opener) return;
+      TRUSTED_OPENERS.forEach((origin) => {
+        try { window.opener.postMessage({ type: 'siyumenghai-comments', text, message }, origin); } catch {}
+      });
+    }
+
+    async function extract() {
+      if (!shareUrl) return show('缺少视频分享链接，请返回原网页重新解析。', 'error');
+      action.disabled = true;
+      show('正在识别视频…');
+      try {
+        const profile = await request('/api/channels/feed/profile', { url: shareUrl });
+        if (profile?.errCode) throw new Error(profile.errMsg || '本地助手无法解析该视频');
+        const object = profile?.data?.object || {};
+        const objectId = String(object.id || profile?.payload?.objectid || '');
+        const nonceId = String(object.objectNonceId || profile?.payload?.objectNonceId || '');
+        if (!objectId || !nonceId) throw new Error('没有取得作品编号，请先在微信电脑版打开这条视频');
+
+        const comments = [];
+        const ids = new Set();
+        const markers = new Set();
+        let marker = '';
+        for (let page = 0; page < 30 && comments.length < LIMIT; page += 1) {
+          const response = await request('/api/channels/feed/comment/list', { oid: objectId, nid: nonceId, next_marker: marker });
+          if (response?.errCode) throw new Error(response.errMsg || '评论读取失败');
+          const data = response?.data || {};
+          const items = Array.isArray(data.commentInfo) ? data.commentInfo : [];
+          items.forEach((item) => {
+            const id = String(item?.commentId || `${item?.username || ''}:${item?.createtime || ''}:${item?.content || ''}`);
+            if (!ids.has(id) && comments.length < LIMIT) { ids.add(id); comments.push(item); }
+          });
+          show(`正在提取评论，已获得 ${comments.length} 条…`);
+          const next = String(data.lastBuffer || '');
+          if (!items.length || !next || Number(data.downContinueFlag) === 0 || markers.has(next)) break;
+          markers.add(next);
+          marker = next;
+        }
+        if (!comments.length) throw new Error('这条视频没有返回可见评论');
+        const text = format(comments);
+        output.value = text;
+        output.hidden = false;
+        const copied = await copy(text);
+        const message = copied ? `已提取 ${comments.length} 条主评论并复制。` : `已提取 ${comments.length} 条主评论，请点击下方按钮复制。`;
+        show(message, copied ? 'ok' : 'error');
+        action.textContent = copied ? '再次复制评论' : '复制评论';
+        notifyOpener(text, message);
+      } catch (error) {
+        const denied = error?.name === 'NotAllowedError' || /permission|not allowed|access denied/i.test(String(error?.message || ''));
+        show(denied ? '请允许此页面访问本地网络，然后再次点击按钮。' : `提取失败：${error?.message || '无法连接本地助手，请确认终端保持打开'}`, 'error');
+      } finally {
+        action.disabled = false;
+      }
+    }
+
+    action.addEventListener('click', () => output.value ? copy(output.value).then((ok) => show(ok ? '评论已复制。' : '请全选下方文本复制。', ok ? 'ok' : 'error')) : extract());
+    window.setTimeout(extract, 250);
+  </script>
+</body>
+</html>
