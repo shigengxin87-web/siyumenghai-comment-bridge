@@ -51,6 +51,34 @@
       return payload.data ?? payload;
     }
 
+    async function helperState(path = '/status', options = {}) {
+      const response = await fetch(new URL(path, API), {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        credentials: 'omit',
+        targetAddressSpace: 'local',
+        ...options
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        const error = new Error(payload.message || `本地助手返回 ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    }
+
+    async function ensureHelperRunning() {
+      const state = await helperState();
+      if (!state.installed) throw new Error('本地助手尚未安装，请返回原网页下载安装。');
+      if (state.running) return true;
+      const launched = await helperState('/launch', { method: 'POST' });
+      if (!launched.launched && !launched.running) throw new Error('本地助手未能启动，请返回原网页重新打开。');
+      action.textContent = '助手启动后重试';
+      show('已自动打开本地助手终端。请在终端输入 Mac 登录密码并回车，保持窗口运行，然后点击“助手启动后重试”。', 'ok');
+      return false;
+    }
+
     function time(value) {
       const date = new Date(Number(value) * 1000);
       if (!Number(value) || Number.isNaN(date.getTime())) return '';
@@ -128,8 +156,11 @@
     async function extract() {
       if (!shareUrl) return show('缺少视频分享链接，请返回原网页重新解析。', 'error');
       action.disabled = true;
-      show('正在识别视频…');
+      show('正在检测本地评论助手…');
       try {
+        if (!await ensureHelperRunning()) return;
+        action.textContent = '允许并提取评论';
+        show('正在识别视频…');
         const profile = await request('/api/channels/feed/profile', { url: shareUrl });
         if (profile?.errCode) throw new Error(profile.errMsg || '本地助手无法解析该视频');
         const object = profile?.data?.object || {};
