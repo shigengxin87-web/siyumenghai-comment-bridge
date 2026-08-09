@@ -27,6 +27,8 @@
     const statusNode = document.querySelector('#status');
     const action = document.querySelector('#action');
     const output = document.querySelector('#output');
+    let permissionRetryTimer = 0;
+    let permissionRetryCount = 0;
 
     function show(message, kind = '') {
       statusNode.textContent = message;
@@ -68,14 +70,56 @@
       return payload;
     }
 
+    async function waitForHelperRunning() {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        try {
+          const state = await helperState();
+          if (state.running) return true;
+        } catch {
+          // The local bridge can briefly restart while the Terminal launcher opens.
+        }
+      }
+      return false;
+    }
+
+    function retryAfterPermission() {
+      if (permissionRetryTimer) return;
+      permissionRetryCount = 0;
+      show('浏览器弹出本地网络权限时请选择“允许”；允许后会自动继续。', 'ok');
+      const retry = async () => {
+        permissionRetryTimer = 0;
+        permissionRetryCount += 1;
+        try {
+          await helperState();
+          permissionRetryCount = 0;
+          extract();
+        } catch {
+          if (permissionRetryCount < 15) {
+            permissionRetryTimer = window.setTimeout(retry, 1000);
+          } else {
+            show('仍未获得本地网络权限，请点击“允许并提取评论”重试。', 'error');
+          }
+        }
+      };
+      permissionRetryTimer = window.setTimeout(retry, 800);
+    }
+
     async function ensureHelperRunning() {
       const state = await helperState();
       if (!state.installed) throw new Error('本地助手尚未安装，请返回原网页下载安装。');
       if (state.running) return true;
       const launched = await helperState('/launch', { method: 'POST' });
       if (!launched.launched && !launched.running) throw new Error('本地助手未能启动，请返回原网页重新打开。');
+      action.textContent = '正在等待本地助手';
+      show('已自动打开本地助手终端。请在终端输入 Mac 登录密码并回车；启动后本页会自动继续。', 'ok');
+      if (await waitForHelperRunning()) {
+        action.textContent = '允许并提取评论';
+        show('本地助手已启动，正在继续提取评论…', 'ok');
+        return true;
+      }
       action.textContent = '助手启动后重试';
-      show('已自动打开本地助手终端。请在终端输入 Mac 登录密码并回车，保持窗口运行，然后点击“助手启动后重试”。', 'ok');
+      show('等待超时。请确认终端中的助手已经启动，再点击“助手启动后重试”。', 'error');
       return false;
     }
 
@@ -210,6 +254,7 @@
               ? '无法连接本地评论助手，请确认助手保持运行后重试。'
               : `提取失败：${message || '本地助手返回异常'}`;
         show(friendlyMessage, 'error');
+        if (denied) retryAfterPermission();
       } finally {
         action.disabled = false;
       }
