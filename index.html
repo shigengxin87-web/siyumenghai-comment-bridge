@@ -21,7 +21,8 @@
   </main>
   <script>
     const API = 'http://127.0.0.1:2024';
-    const LIMIT = 200;
+    const LIMIT = 1000;
+    const PAGE_LIMIT = 200;
     const TRUSTED_OPENERS = new Set(['http://siyumenghai.cn', 'https://siyumenghai.cn']);
     const shareUrl = new URL(location.href).searchParams.get('url') || '';
     const statusNode = document.querySelector('#status');
@@ -216,7 +217,7 @@
         const ids = new Set();
         const markers = new Set();
         let marker = '';
-        for (let page = 0; page < 30 && comments.length < LIMIT; page += 1) {
+        for (let page = 0; page < PAGE_LIMIT && comments.length < LIMIT; page += 1) {
           const response = await request('/api/channels/feed/comment/list', { oid: objectId, nid: nonceId, next_marker: marker });
           if (response?.errCode) throw new Error(response.errMsg || '评论读取失败');
           const data = response?.data || {};
